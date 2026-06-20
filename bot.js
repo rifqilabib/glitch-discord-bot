@@ -28,17 +28,13 @@ async function registerCommands() {
     const commands = [
         new SlashCommandBuilder()
             .setName('getkey')
-            .setDescription('🔑 Dapatkan link untuk verifikasi & ambil free key')
-            .toJSON(),
-        new SlashCommandBuilder()
-            .setName('claimkey')
-            .setDescription('✅ Claim key setelah selesai verifikasi link')
+            .setDescription('🔑 Dapatkan link verifikasi, atau ambil key kalau sudah selesai verifikasi')
             .toJSON(),
     ];
     const rest = new REST({ version: '10' }).setToken(CONFIG.BOT_TOKEN);
     try {
         await rest.put(Routes.applicationCommands(CONFIG.CLIENT_ID), { body: commands });
-        console.log('[✓] Slash commands /getkey & /claimkey terdaftar');
+        console.log('[✓] Slash command /getkey terdaftar');
     } catch (e) {
         console.error('[!] Gagal register:', e.message);
     }
@@ -105,10 +101,10 @@ function embedGetLink(verifyUrl) {
         .setDescription(
             `Klik tombol **🔗 Klik untuk Verifikasi** di bawah untuk memulai.\n\n` +
             `**Langkah-langkah:**\n` +
-            `1️⃣ Klik tombol verifikasi\n` +
+            `1️⃣ Klik tombol verifikasi (atau salin link-nya)\n` +
             `2️⃣ Lewati halaman iklan yang muncul\n` +
-            `3️⃣ Tunggu sampai redirect selesai\n` +
-            `4️⃣ Balik ke Discord, ketik \`/claimkey\` untuk ambil key kamu\n\n` +
+            `3️⃣ Tunggu sampai redirect selesai & key muncul di web\n` +
+            `4️⃣ Balik ke Discord, ketik \`/getkey\` lagi untuk ambil key kamu\n\n` +
             `⚠️ Link ini personal untuk kamu — jangan dibagikan ke orang lain.`
         )
         .setFooter({ text: 'Glitch Team Key System' });
@@ -140,18 +136,6 @@ function embedClaimSuccess(key, requestedBy, expiresUnix) {
             `Expires: <t:${expiresUnix}:R>`
         )
         .setFooter({ text: `Requested by ${requestedBy}` });
-}
-
-function embedNotVerifiedYet() {
-    return new EmbedBuilder()
-        .setColor(0xF59E0B)
-        .setTitle('⏳ Belum Verifikasi')
-        .setDescription(
-            `Kamu belum menyelesaikan proses verifikasi.\n\n` +
-            `Ketik \`/getkey\` dulu, klik link yang dikirim bot, ` +
-            `selesaikan semua halaman iklan, baru ketik \`/claimkey\` lagi.`
-        )
-        .setFooter({ text: 'Glitch Team Key System' });
 }
 
 function embedError(msg) {
@@ -188,6 +172,19 @@ client.on('interactionCreate', async (interaction) => {
             if (config.maintenance)   return interaction.editReply({ embeds: [embedError('Server is under maintenance.')] });
             if (!config.free_enabled) return interaction.editReply({ embeds: [embedError('Free key is currently disabled.')] });
 
+            // Cek dulu: mungkin user sudah selesai verifikasi dari link sebelumnya
+            const status = await checkStatus(userId);
+            if (status?.ok && status.verified) {
+                const expiresUnix = toUnix(status.expires_at);
+                await interaction.editReply({
+                    embeds: [embedClaimSuccess(status.key, username, expiresUnix)],
+                    components: [buildButtons()]
+                });
+                console.log(`[CLAIM] ${username} (${userId}) → ${status.key}`);
+                return;
+            }
+
+            // Belum verifikasi -> buat / ambil link verifikasi
             const result = await createLink(userId);
             if (!result?.ok) {
                 return interaction.editReply({ embeds: [embedError(result?.msg || 'Failed to create link.')] });
@@ -208,35 +205,6 @@ client.on('interactionCreate', async (interaction) => {
 
         } catch (err) {
             console.error('[ERROR /getkey]', err.message);
-            await interaction.editReply({ embeds: [embedError('Internal error.')] }).catch(() => {});
-        }
-    }
-
-    // ── /claimkey ──
-    if (interaction.commandName === 'claimkey') {
-        await interaction.deferReply({ ephemeral: true });
-
-        try {
-            const status = await checkStatus(userId);
-
-            if (!status?.ok) {
-                return interaction.editReply({ embeds: [embedError('Cannot connect to panel.')] });
-            }
-
-            if (!status.verified) {
-                return interaction.editReply({ embeds: [embedNotVerifiedYet()] });
-            }
-
-            const expiresUnix = toUnix(status.expires_at);
-            await interaction.editReply({
-                embeds: [embedClaimSuccess(status.key, username, expiresUnix)],
-                components: [buildButtons()]
-            });
-
-            console.log(`[CLAIM] ${username} (${userId}) → ${status.key}`);
-
-        } catch (err) {
-            console.error('[ERROR /claimkey]', err.message);
             await interaction.editReply({ embeds: [embedError('Internal error.')] }).catch(() => {});
         }
     }
