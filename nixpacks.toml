@@ -1,0 +1,14 @@
+# nixpacks.toml — wajib ada di root project supaya Puppeteer/Chromium bisa jalan di Railway
+[phases.setup]
+nixPkgs = [
+  "chromium",
+  "nodejs_20",
+  "nss",
+  "freetype",
+  "harfbuzz",
+  "ca-certificates",
+  "fontconfig"
+]
+
+[start]
+cmd = "node bot.js"
