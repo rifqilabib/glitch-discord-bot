@@ -99,14 +99,18 @@ function embedGetLink(verifyUrl) {
         .setColor(0x5865F2)
         .setTitle('🔑 Free Key Verification')
         .setDescription(
-            `Klik tombol **🔗 Klik untuk Verifikasi** di bawah untuk memulai.\n\n` +
+            `Klik tombol **🔗 Klik untuk Verifikasi** di bawah, atau salin link-nya manual.\n\n` +
             `**Langkah-langkah:**\n` +
-            `1️⃣ Klik tombol verifikasi (atau salin link-nya)\n` +
+            `1️⃣ Klik tombol verifikasi (atau salin link di bawah)\n` +
             `2️⃣ Lewati halaman iklan yang muncul\n` +
             `3️⃣ Tunggu sampai redirect selesai & key muncul di web\n` +
             `4️⃣ Balik ke Discord, ketik \`/getkey\` lagi untuk ambil key kamu\n\n` +
             `⚠️ Link ini personal untuk kamu — jangan dibagikan ke orang lain.`
         )
+        .addFields({
+            name: '🔗 Link Verifikasi (tap untuk select & copy)',
+            value: `\`\`\`\n${verifyUrl}\n\`\`\``
+        })
         .setFooter({ text: 'Glitch Team Key System' });
 }
 
