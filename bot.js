@@ -1,12 +1,7 @@
 // ============================================================
-// bot.js — GlitchRoblox Discord Free Key Bot
-// Bot benar-benar membuka shortlink pakai Puppeteer (headless Chrome)
-// supaya MASUK STATISTIK move2link, seperti manusia buka browser.
-//
-// WAJIB ada file nixpacks.toml di root project (sudah disediakan)
-// supaya Railway install Chromium dengan benar.
-//
-// Install: npm install discord.js puppeteer-core axios
+// bot.js — GlitchRoblox Discord Free Key Bot (Link-Based)
+// User klik link sendiri di browser mereka → masuk statistik move2link asli
+// Install: npm install discord.js axios
 // ============================================================
 
 const {
@@ -15,11 +10,7 @@ const {
     ButtonStyle, REST, Routes
 } = require('discord.js');
 const axios = require('axios');
-const puppeteer = require('puppeteer-core');
 
-// ============================================================
-// KONFIGURASI — semua dari Railway Variables
-// ============================================================
 const CONFIG = {
     BOT_TOKEN:    process.env.BOT_TOKEN,
     CLIENT_ID:    process.env.CLIENT_ID,
@@ -28,49 +19,34 @@ const CONFIG = {
     CHANNEL_ID:   process.env.CHANNEL_ID   || '',
     LINK_SERVER:  process.env.LINK_SERVER  || 'https://discord.gg/INVITE_KAMU',
     LINK_WEBSITE: process.env.LINK_WEBSITE || 'https://glitchmods.com',
-
-    // Path Chromium hasil install nixpacks (Railway/Nix)
-    CHROME_PATH:  process.env.CHROME_PATH  || '/nix/store/.chromium-wrapped/bin/chromium',
-
-    SHORTLINK_WAIT_MS: 9000, // tunggu 9 detik di halaman shortlink (durasi timer iklan)
 };
-// ============================================================
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-const sleep  = (ms) => new Promise(r => setTimeout(r, ms));
 
-// ── Cari executable Chromium otomatis (Railway/Nix kadang beda path) ──
-const { execSync } = require('child_process');
-function findChromiumPath() {
-    if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
-    try {
-        const result = execSync('which chromium || which chromium-browser || which google-chrome').toString().trim();
-        if (result) return result;
-    } catch {}
-    return CONFIG.CHROME_PATH; // fallback
-}
-
-// ── Register slash command ───────────────────────────────────
+// ── Register slash commands ──────────────────────────────────
 async function registerCommands() {
     const commands = [
         new SlashCommandBuilder()
             .setName('getkey')
-            .setDescription('🔑 Get your free Glitch Team key')
-            .toJSON()
+            .setDescription('🔑 Dapatkan link untuk verifikasi & ambil free key')
+            .toJSON(),
+        new SlashCommandBuilder()
+            .setName('claimkey')
+            .setDescription('✅ Claim key setelah selesai verifikasi link')
+            .toJSON(),
     ];
     const rest = new REST({ version: '10' }).setToken(CONFIG.BOT_TOKEN);
     try {
         await rest.put(Routes.applicationCommands(CONFIG.CLIENT_ID), { body: commands });
-        console.log('[✓] Slash command /getkey terdaftar');
+        console.log('[✓] Slash commands /getkey & /claimkey terdaftar');
     } catch (e) {
         console.error('[!] Gagal register:', e.message);
     }
 }
 
-// ── Ambil config dari panel ──────────────────────────────────
 async function getPanelConfig() {
     try {
-        const res = await axios.get(`${CONFIG.PANEL_URL}/api/discord_key.php`, {
+        const res = await axios.get(`${CONFIG.PANEL_URL}/api/discord_api.php`, {
             params: { action: 'get_config' },
             headers: { 'X-Bot-Secret': CONFIG.API_SECRET },
             timeout: 8000
@@ -79,162 +55,35 @@ async function getPanelConfig() {
     } catch { return null; }
 }
 
-// ── Generate key dari panel ──────────────────────────────────
-async function generateKey(discordId) {
-    const res = await axios.get(`${CONFIG.PANEL_URL}/api/discord_key.php`, {
-        params: { action: 'generate', discord_id: discordId },
+async function createLink(discordId) {
+    const res = await axios.get(`${CONFIG.PANEL_URL}/api/discord_api.php`, {
+        params: { action: 'create_link', discord_id: discordId },
         headers: { 'X-Bot-Secret': CONFIG.API_SECRET },
         timeout: 10000
     });
     return res.data;
 }
 
-// ── Build URL shortlink sesuai provider ─────────────────────
-function buildShortlinkUrl(type, baseUrl, apiKey, destination) {
-    const enc = encodeURIComponent(destination);
-    switch (type) {
-        case 'lootlinks': case 'workink':
-            return `${baseUrl}?api=${encodeURIComponent(apiKey)}&url=${enc}`;
-        case 'lootlabs': case 'rekonise':
-            return `${baseUrl}?token=${encodeURIComponent(apiKey)}&url=${enc}`;
-        case 'linkvertise':
-            return `${baseUrl.replace(/\/$/, '')}/${encodeURIComponent(apiKey)}?link=${enc}`;
-        default: // move2link
-            return `${baseUrl}?key=${encodeURIComponent(apiKey)}&destination_url=${enc}&should_redirect=true`;
-    }
+async function checkStatus(discordId) {
+    const res = await axios.get(`${CONFIG.PANEL_URL}/api/discord_api.php`, {
+        params: { action: 'check_status', discord_id: discordId },
+        headers: { 'X-Bot-Secret': CONFIG.API_SECRET },
+        timeout: 10000
+    });
+    return res.data;
 }
 
-// ================================================================
-// INTI: Bot buka shortlink pakai Puppeteer (headless Chromium)
-// — Render JS, jalankan timer iklan, gerakkan mouse, scroll,
-//   klik tombol continue — supaya tercatat di statistik move2link
-// ================================================================
-let cachedChromePath = null;
-
-async function visitShortlinkLikeHuman(shortlinkUrl, stepLabel, onProgress) {
-    let browser = null;
-    try {
-        if (!cachedChromePath) cachedChromePath = findChromiumPath();
-
-        onProgress(`🌐 Membuka browser untuk checkpoint ${stepLabel}...`);
-
-        browser = await puppeteer.launch({
-            headless: true,
-            executablePath: cachedChromePath,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--disable-blink-features=AutomationControlled',
-                '--window-size=1366,768',
-            ],
-        });
-
-        const page = await browser.newPage();
-
-        await page.setUserAgent(
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+function buildButtons(verifyUrl = null) {
+    const row = new ActionRowBuilder();
+    if (verifyUrl) {
+        row.addComponents(
+            new ButtonBuilder()
+                .setLabel('🔗 Klik untuk Verifikasi')
+                .setStyle(ButtonStyle.Link)
+                .setURL(verifyUrl)
         );
-
-        // Sembunyikan tanda automation
-        await page.evaluateOnNewDocument(() => {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            window.chrome = { runtime: {} };
-            Object.defineProperty(navigator, 'languages', { get: () => ['id-ID', 'id', 'en-US'] });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-        });
-
-        await page.setViewport({ width: 1366, height: 768 });
-        await page.setExtraHTTPHeaders({ 'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8' });
-
-        onProgress(`📄 Loading halaman shortlink ${stepLabel}...`);
-
-        await page.goto(shortlinkUrl, {
-            waitUntil: 'networkidle2',
-            timeout: 30000
-        });
-
-        await sleep(2000);
-
-        // Simulasi gerakan manusia: mouse move + scroll random
-        try {
-            await page.mouse.move(200, 300);
-            await sleep(400);
-            await page.mouse.move(600, 150, { steps: 10 });
-            await page.evaluate(() => window.scrollBy(0, 200));
-            await sleep(600);
-            await page.evaluate(() => window.scrollBy(0, -100));
-        } catch {}
-
-        onProgress(`⏳ Menunggu timer iklan checkpoint ${stepLabel}...`);
-
-        // Tunggu durasi penuh timer shortlink supaya View tercatat valid
-        await sleep(CONFIG.SHORTLINK_WAIT_MS);
-
-        // Klik tombol Continue/Get Link/Claim sesuai provider
-        const continueSelectors = [
-            'a[id*="continue"]', 'button[id*="continue"]',
-            'a.btn-continue', 'button.btn-continue',
-            '#continue-btn', '.continue-btn',
-            '#get-link', '.get-link', 'a#get-link',
-            '#claim-button', '.claim-button',
-            '#proceed', '.proceed',
-            '#ad-continue', '.ad-continue',
-            'a[href*="destination"]', 'a[href*="redirect"]',
-            'button[class*="btn"]', 'a[class*="btn"]',
-        ];
-
-        let clicked = false;
-        for (const selector of continueSelectors) {
-            try {
-                const el = await page.$(selector);
-                if (el) {
-                    const isVisible = await el.isIntersectingViewport();
-                    if (isVisible) {
-                        await page.mouse.move(300, 400, { steps: 8 });
-                        await sleep(300);
-                        await el.click();
-                        clicked = true;
-                        console.log(`[✓] Klik tombol: ${selector}`);
-                        break;
-                    }
-                }
-            } catch {}
-        }
-
-        if (!clicked) {
-            console.log('[~] Tombol tidak ditemukan, tunggu redirect otomatis...');
-            await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-            await sleep(3000);
-        }
-
-        await sleep(2500);
-
-        const finalUrl = page.url();
-        console.log(`[✓] Shortlink ${stepLabel} selesai → ${finalUrl}`);
-
-        onProgress(`✅ Checkpoint ${stepLabel} berhasil!`);
-        return true;
-
-    } catch (err) {
-        console.error(`[!] Shortlink ${stepLabel} error:`, err.message);
-        onProgress(`⚠️ Checkpoint ${stepLabel} timeout, lanjut...`);
-        return false;
-    } finally {
-        if (browser) await browser.close();
     }
-}
-
-// ── Tombol-tombol bawah embed ────────────────────────────────
-function buildButtons() {
-    return new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId('btn_result')
-            .setLabel('Result')
-            .setEmoji('📋')
-            .setStyle(ButtonStyle.Primary)
-            .setDisabled(true),
+    row.addComponents(
         new ButtonBuilder()
             .setLabel('Server')
             .setEmoji('🌐')
@@ -246,26 +95,63 @@ function buildButtons() {
             .setStyle(ButtonStyle.Link)
             .setURL(CONFIG.LINK_WEBSITE),
     );
+    return row;
 }
 
-function embedLoading(statusLine, detail = '') {
+function embedGetLink(verifyUrl) {
     return new EmbedBuilder()
         .setColor(0x5865F2)
-        .setDescription(`**⏳ Processing...**\n\`\`\`\n${statusLine}${detail ? '\n' + detail : ''}\n\`\`\``)
+        .setTitle('🔑 Free Key Verification')
+        .setDescription(
+            `Klik tombol **🔗 Klik untuk Verifikasi** di bawah untuk memulai.\n\n` +
+            `**Langkah-langkah:**\n` +
+            `1️⃣ Klik tombol verifikasi\n` +
+            `2️⃣ Lewati halaman iklan yang muncul\n` +
+            `3️⃣ Tunggu sampai redirect selesai\n` +
+            `4️⃣ Balik ke Discord, ketik \`/claimkey\` untuk ambil key kamu\n\n` +
+            `⚠️ Link ini personal untuk kamu — jangan dibagikan ke orang lain.`
+        )
         .setFooter({ text: 'Glitch Team Key System' });
 }
 
-function embedSuccess(key, requestedBy, elapsedSec) {
+function embedAlreadyHasKey(key, expiresUnix) {
     return new EmbedBuilder()
         .setColor(0x57F287)
         .setDescription(
             `**✅ Key Retrieved!**\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `Your key has been retrieved. Copy it and input it into the application.\n` +
+            `Kamu sudah punya key aktif:\n` +
             `\`${key}\`\n\n` +
-            `\`\`\`\n${key}\n\`\`\``
+            `\`\`\`\n${key}\n\`\`\`\n` +
+            `Expires: <t:${expiresUnix}:R>`
         )
-        .setFooter({ text: `Requested by ${requestedBy}. • ⏱️ ${elapsedSec}s` });
+        .setFooter({ text: 'Glitch Team Key System' });
+}
+
+function embedClaimSuccess(key, requestedBy, expiresUnix) {
+    return new EmbedBuilder()
+        .setColor(0x57F287)
+        .setDescription(
+            `**✅ Key Retrieved!**\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `Verifikasi berhasil! Ini key kamu:\n` +
+            `\`${key}\`\n\n` +
+            `\`\`\`\n${key}\n\`\`\`\n` +
+            `Expires: <t:${expiresUnix}:R>`
+        )
+        .setFooter({ text: `Requested by ${requestedBy}` });
+}
+
+function embedNotVerifiedYet() {
+    return new EmbedBuilder()
+        .setColor(0xF59E0B)
+        .setTitle('⏳ Belum Verifikasi')
+        .setDescription(
+            `Kamu belum menyelesaikan proses verifikasi.\n\n` +
+            `Ketik \`/getkey\` dulu, klik link yang dikirim bot, ` +
+            `selesaikan semua halaman iklan, baru ketik \`/claimkey\` lagi.`
+        )
+        .setFooter({ text: 'Glitch Team Key System' });
 }
 
 function embedError(msg) {
@@ -275,84 +161,92 @@ function embedError(msg) {
         .setFooter({ text: 'Glitch Team Key System' });
 }
 
+function toUnix(mysqlDatetime) {
+    // mysqlDatetime format: "YYYY-MM-DD HH:MM:SS" (asumsi timezone server panel = Asia/Jakarta)
+    const d = new Date(mysqlDatetime.replace(' ', 'T') + '+07:00');
+    return Math.floor(d.getTime() / 1000);
+}
+
 // ── HANDLER /getkey ──────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isChatInputCommand() || interaction.commandName !== 'getkey') return;
+    if (!interaction.isChatInputCommand()) return;
 
     if (CONFIG.CHANNEL_ID && interaction.channelId !== CONFIG.CHANNEL_ID) {
         return interaction.reply({ content: `❌ Hanya di <#${CONFIG.CHANNEL_ID}>`, ephemeral: true });
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    const userId   = interaction.user.id;
+    const username = interaction.user.username;
 
-    const userId    = interaction.user.id;
-    const username  = interaction.user.username;
-    const startTime = Date.now();
+    // ── /getkey ──
+    if (interaction.commandName === 'getkey') {
+        await interaction.deferReply({ ephemeral: true });
 
-    const setLoading = async (status, detail = '') => {
-        await interaction.editReply({
-            embeds: [embedLoading(status, detail)],
-            components: [buildButtons()]
-        }).catch(() => {});
-    };
+        try {
+            const config = await getPanelConfig();
+            if (!config?.ok)          return interaction.editReply({ embeds: [embedError('Cannot connect to panel.')] });
+            if (config.maintenance)   return interaction.editReply({ embeds: [embedError('Server is under maintenance.')] });
+            if (!config.free_enabled) return interaction.editReply({ embeds: [embedError('Free key is currently disabled.')] });
 
-    try {
-        await setLoading('Syncing with panel...', 'Checking config & maintenance');
-        const config = await getPanelConfig();
+            const result = await createLink(userId);
+            if (!result?.ok) {
+                return interaction.editReply({ embeds: [embedError(result?.msg || 'Failed to create link.')] });
+            }
 
-        if (!config?.ok)          return interaction.editReply({ embeds: [embedError('Cannot connect to panel.')], components: [buildButtons()] });
-        if (config.maintenance)   return interaction.editReply({ embeds: [embedError('Server is under maintenance.')], components: [buildButtons()] });
-        if (!config.free_enabled) return interaction.editReply({ embeds: [embedError('Free key is currently disabled.')], components: [buildButtons()] });
+            if (result.has_key) {
+                const expiresUnix = toUnix(result.expires_at);
+                return interaction.editReply({
+                    embeds: [embedAlreadyHasKey(result.key, expiresUnix)],
+                    components: [buildButtons()]
+                });
+            }
 
-        const totalLinks = config.shortlink_count || 1;
-
-        for (let i = 0; i < totalLinks; i++) {
-            const stepLabel = `${i + 1}/${totalLinks}`;
-            const dest  = `${CONFIG.PANEL_URL}/get_key-free/get-key.php?status=verify_complete&discord=1`;
-            const slUrl = buildShortlinkUrl(config.shortlink_type, config.shortlink_url, config.shortlink_api, dest);
-
-            await visitShortlinkLikeHuman(slUrl, stepLabel, async (msg) => {
-                await setLoading(msg, `Checkpoint ${i + 1} dari ${totalLinks}`);
+            return interaction.editReply({
+                embeds: [embedGetLink(result.verify_url)],
+                components: [buildButtons(result.verify_url)]
             });
 
-            if (i < totalLinks - 1) await sleep(1000);
+        } catch (err) {
+            console.error('[ERROR /getkey]', err.message);
+            await interaction.editReply({ embeds: [embedError('Internal error.')] }).catch(() => {});
         }
+    }
 
-        await setLoading('Generating your key...', 'Almost done');
-        await sleep(500);
+    // ── /claimkey ──
+    if (interaction.commandName === 'claimkey') {
+        await interaction.deferReply({ ephemeral: true });
 
-        const result = await generateKey(userId);
+        try {
+            const status = await checkStatus(userId);
 
-        if (!result?.ok) {
-            return interaction.editReply({
-                embeds: [embedError(result?.msg || 'Key generation failed.')],
+            if (!status?.ok) {
+                return interaction.editReply({ embeds: [embedError('Cannot connect to panel.')] });
+            }
+
+            if (!status.verified) {
+                return interaction.editReply({ embeds: [embedNotVerifiedYet()] });
+            }
+
+            const expiresUnix = toUnix(status.expires_at);
+            await interaction.editReply({
+                embeds: [embedClaimSuccess(status.key, username, expiresUnix)],
                 components: [buildButtons()]
             });
+
+            console.log(`[CLAIM] ${username} (${userId}) → ${status.key}`);
+
+        } catch (err) {
+            console.error('[ERROR /claimkey]', err.message);
+            await interaction.editReply({ embeds: [embedError('Internal error.')] }).catch(() => {});
         }
-
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-        await interaction.editReply({
-            embeds: [embedSuccess(result.key, username, elapsed)],
-            components: [buildButtons()]
-        });
-
-        console.log(`[KEY] ${username} (${userId}) → ${result.key} | ${elapsed}s`);
-
-    } catch (err) {
-        console.error('[ERROR]', err.message);
-        await interaction.editReply({
-            embeds: [embedError('Internal error. Contact owner.')],
-            components: [buildButtons()]
-        }).catch(() => {});
     }
 });
 
-// ── Bot ready ────────────────────────────────────────────────
 client.once('ready', async () => {
     console.log(`[✓] Logged in as ${client.user.tag}`);
     client.user.setActivity('/getkey — Free Glitch Key', { type: 0 });
     await registerCommands();
-    console.log('[✓] Bot siap! Chrome path:', cachedChromePath || '(belum dicek)');
+    console.log('[✓] Bot siap!');
 });
 
 client.login(CONFIG.BOT_TOKEN);
